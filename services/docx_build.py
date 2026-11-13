@@ -92,16 +92,49 @@ def _set_cell_shading(cell, rgb: tuple[int, int, int]) -> None:
     tc_pr.append(shd)
 
 
+def _content_width_inches(doc: Document) -> float:
+    section = doc.sections[-1]
+    page_w = section.page_width.inches
+    left = section.left_margin.inches
+    right = section.right_margin.inches
+    return max(1.0, page_w - left - right)
+
+
+def _pt_to_inches(pt: float) -> float:
+    return pt / 72.0
+
+
+def _apply_table_widths(table, col_widths_pt: list[float] | None) -> None:
+    if not col_widths_pt:
+        return
+    total_pt = sum(col_widths_pt)
+    if total_pt <= 0:
+        return
+    try:
+        table.autofit = False
+        table.allow_autofit = False
+    except Exception:
+        pass
+    table.width = Inches(_pt_to_inches(total_pt))
+    for idx, w_pt in enumerate(col_widths_pt):
+        if idx >= len(table.columns):
+            break
+        w = Inches(_pt_to_inches(w_pt))
+        for cell in table.columns[idx].cells:
+            cell.width = w
+
+
 def _add_paragraph_block(doc: Document, block: TextBlock, body_size: float) -> None:
     p = doc.add_paragraph()
     is_title = block.size >= body_size * 1.35
+    body_pt = min(max(block.size, 8), 14)
     if block.runs:
         for tr in block.runs:
-            _apply_text_run(p.add_run(), tr, default_pt=block.size)
+            _apply_text_run(p.add_run(), tr, default_pt=body_pt)
     else:
         run = p.add_run(block.text)
         run.bold = block.is_bold
-        size = Pt(min(block.size, 28)) if is_title else Pt(11)
+        size = Pt(min(block.size, 28)) if is_title else Pt(body_pt)
         run.font.size = size
         if block.color_rgb:
             run.font.color.rgb = RGBColor(*block.color_rgb)
@@ -125,12 +158,16 @@ def _style_cell(
     para = cell.paragraphs[0] if cell.paragraphs else cell.add_paragraph()
     run = para.add_run(text)
     run.bold = header or bold
-    run.font.size = Pt(font_pt or 10)
+    run.font.size = Pt(min(max(font_pt or 10, 7), 14))
     if color_rgb:
         run.font.color.rgb = RGBColor(*color_rgb)
 
 
-def _add_word_table_spans(doc: Document, span_rows: list[list[SpanCellInfo]]) -> None:
+def _add_word_table_spans(
+    doc: Document,
+    span_rows: list[list[SpanCellInfo]],
+    col_widths_pt: list[float] | None = None,
+) -> None:
     col_count = max(sum(c.colspan for c in row) for row in span_rows)
     row_count = len(span_rows)
     table = doc.add_table(rows=row_count, cols=col_count)
@@ -138,6 +175,13 @@ def _add_word_table_spans(doc: Document, span_rows: list[list[SpanCellInfo]]) ->
         table.style = "Table Grid"
     except KeyError:
         pass
+    widths = col_widths_pt
+    if widths and len(widths) != col_count:
+        total = sum(widths) if widths else 0
+        if total > 0 and col_count:
+            unit = total / col_count
+            widths = [unit] * col_count
+    _apply_table_widths(table, widths)
 
     occupied = [[False] * col_count for _ in range(row_count)]
 
@@ -169,7 +213,11 @@ def _add_word_table_spans(doc: Document, span_rows: list[list[SpanCellInfo]]) ->
     doc.add_paragraph()
 
 
-def _add_word_table(doc: Document, rows: list[list[str]]) -> None:
+def _add_word_table(
+    doc: Document,
+    rows: list[list[str]],
+    col_widths_pt: list[float] | None = None,
+) -> None:
     col_count = max(len(row) for row in rows)
     row_count = len(rows)
     table = doc.add_table(rows=row_count, cols=col_count)
@@ -177,6 +225,7 @@ def _add_word_table(doc: Document, rows: list[list[str]]) -> None:
         table.style = "Table Grid"
     except KeyError:
         pass
+    _apply_table_widths(table, col_widths_pt)
     for ri, row in enumerate(rows):
         for ci in range(col_count):
             text = row[ci] if ci < len(row) else ""
@@ -187,7 +236,8 @@ def _add_word_table(doc: Document, rows: list[list[str]]) -> None:
 def _add_image_element(doc: Document, element: ImageElement) -> None:
     img = element.image
     stream = BytesIO(img.data)
-    width_in = min(img.width_pt / 72.0, 6.5)
+    max_w = _content_width_inches(doc)
+    width_in = min(_pt_to_inches(img.width_pt), max_w)
     try:
         doc.add_picture(stream, width=Inches(width_in))
     except Exception:
@@ -198,10 +248,11 @@ def _add_image_element(doc: Document, element: ImageElement) -> None:
 
 
 def _add_table_element(doc: Document, element: TableElement) -> None:
+    w = element.col_widths_pt
     if element.span_rows:
-        _add_word_table_spans(doc, element.span_rows)
+        _add_word_table_spans(doc, element.span_rows, w)
     elif element.rows:
-        _add_word_table(doc, element.rows)
+        _add_word_table(doc, element.rows, w)
 
 
 def add_page_elements(doc: Document, elements: list[PageElement]) -> None:

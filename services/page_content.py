@@ -8,6 +8,7 @@ from typing import Union
 import pymupdf as fitz
 
 from services.pdf_images import PdfImage, extract_page_images
+from services.table_layout import column_widths_pt
 from services.table_spans import SpanCellInfo, flat_rows_from_table, flat_rows_with_styles, span_rows_from_table
 from services.text_extract import TextBlock, text_block_from_bbox
 
@@ -23,6 +24,7 @@ class TableElement:
     y0: float
     rows: list[list[str]]
     span_rows: list[list[SpanCellInfo]] | None = None
+    col_widths_pt: list[float] | None = None
 
 
 @dataclass
@@ -66,8 +68,14 @@ def extract_page_content(page: fitz.Page) -> list[PageElement]:
                 continue
             rect = _rect_from_bbox(table.bbox)
             table_rects.append(rect)
+            col_w = column_widths_pt(table)
             elements.append(
-                TableElement(y0=rect.y0, rows=rows, span_rows=span_rows),
+                TableElement(
+                    y0=rect.y0,
+                    rows=rows,
+                    span_rows=span_rows,
+                    col_widths_pt=col_w or None,
+                ),
             )
     except Exception:
         pass
