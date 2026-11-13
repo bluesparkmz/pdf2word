@@ -15,7 +15,7 @@ from services.docx_build import (
     page_size_key,
     start_new_page,
 )
-from services.ocr import ocr_pdf_pages
+from services.ocr import ocr_pdf_pages, ocr_unavailable_message
 from services.page_content import extract_page_content
 from services.pdf_analyze import analyze_pdf, pdf_needs_ocr
 
@@ -33,6 +33,7 @@ class ConversionResult:
     ocr_pages: int
     native_pages: int
     mode_used: str
+    warning: str | None = None
 
 
 def convert_pdf_to_docx(
@@ -59,8 +60,17 @@ def convert_pdf_to_docx(
         ocr_indices = [a.page_index for a in analyses if not a.has_sufficient_text]
 
     ocr_text: dict[int, str] = {}
+    warning: str | None = None
+    ocr_disabled = False
     if ocr_indices and ocr_mode != OcrMode.OFF:
-        ocr_text = ocr_pdf_pages(str(pdf_path), ocr_indices, lang, resolution)
+        try:
+            ocr_text = ocr_pdf_pages(str(pdf_path), ocr_indices, lang, resolution)
+        except RuntimeError as exc:
+            if "Tesseract" in str(exc) or "tesseract" in str(exc).lower():
+                ocr_disabled = True
+                warning = ocr_unavailable_message()
+            else:
+                raise
 
     doc = new_document(pdf_path.stem)
     native_count = 0
@@ -81,8 +91,10 @@ def convert_pdf_to_docx(
                 start_new_page(doc, rect.width, rect.height, new_size=False)
             last_size = size
 
-            needs_ocr_page = ocr_mode != OcrMode.OFF and (
-                use_ocr_globally or use_ocr_auto or i in ocr_indices
+            needs_ocr_page = (
+                not ocr_disabled
+                and ocr_mode != OcrMode.OFF
+                and (use_ocr_globally or use_ocr_auto or i in ocr_indices)
             )
             content = extract_page_content(page)
             if content:
@@ -103,7 +115,9 @@ def convert_pdf_to_docx(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     doc.save(str(output_path))
 
-    if use_ocr_globally:
+    if ocr_disabled:
+        mode = "native_fallback_no_tesseract"
+    elif use_ocr_globally:
         mode = "force_ocr"
     elif hybrid and ocr_count:
         mode = "hybrid"
@@ -118,4 +132,5 @@ def convert_pdf_to_docx(
         ocr_pages=ocr_count,
         native_pages=native_count,
         mode_used=mode,
+        warning=warning,
     )

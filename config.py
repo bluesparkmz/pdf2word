@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     upload_dir: Path = Path("data/uploads")
     output_dir: Path = Path("data/outputs")
     tesseract_cmd: str | None = None
+    poppler_path: str | None = None
     default_ocr_lang: str = "por+eng"
     ocr_dpi: int = 300
     min_text_chars_per_page: int = 40
@@ -18,7 +19,6 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
-if settings.tesseract_cmd:
-    import pytesseract
+from services.tesseract_setup import configure_tesseract  # noqa: E402
 
-    pytesseract.pytesseract.tesseract_cmd = settings.tesseract_cmd
+configure_tesseract(settings.tesseract_cmd)

@@ -14,7 +14,8 @@ from fastapi.responses import FileResponse, HTMLResponse
 
 from config import settings
 from services.converter import OcrMode, convert_pdf_to_docx
-from services.ocr import tesseract_available
+from services.ocr import ocr_diagnostics
+from services.tesseract_setup import configure_tesseract
 
 app = FastAPI(
     title="PDF2Word Advanced",
@@ -36,17 +37,17 @@ for d in (settings.upload_dir, settings.output_dir):
 
 @app.on_event("startup")
 def startup() -> None:
-    if settings.tesseract_cmd:
-        import pytesseract
-
-        pytesseract.pytesseract.tesseract_cmd = settings.tesseract_cmd
+    configure_tesseract(settings.tesseract_cmd)
 
 
 @app.get("/health")
 def health():
+    ocr = ocr_diagnostics()
     return {
         "status": "ok",
-        "tesseract": tesseract_available(),
+        "tesseract": ocr["available"],
+        "tesseract_cmd": ocr["tesseract_cmd"],
+        "poppler_path": ocr["poppler_path"],
         "ocr_lang_default": settings.default_ocr_lang,
         "max_upload_mb": settings.max_upload_mb,
     }
@@ -87,6 +88,11 @@ async def convert(
         )
     except RuntimeError as e:
         pdf_path.unlink(missing_ok=True)
+        if "poppler" in str(e).lower():
+            raise HTTPException(
+                503,
+                "Poppler não encontrado (pdf2image). Defina PDF2WORD_POPPLER_PATH ou POPPLER_PATH.",
+            ) from e
         raise HTTPException(503, str(e)) from e
     except Exception as e:
         pdf_path.unlink(missing_ok=True)
@@ -94,7 +100,7 @@ async def convert(
     finally:
         pdf_path.unlink(missing_ok=True)
 
-    return {
+    payload = {
         "job_id": job_id,
         "download": f"/download/{job_id}",
         "pages": result.pages,
@@ -103,6 +109,9 @@ async def convert(
         "mode_used": result.mode_used,
         "filename": f"{Path(file.filename).stem}.docx",
     }
+    if result.warning:
+        payload["warning"] = result.warning
+    return payload
 
 
 @app.get("/download/{job_id}")
@@ -135,10 +144,14 @@ def ui():
   button { background: #2563eb; color: #fff; border: none; border-radius: 8px; cursor: pointer; font-weight: 600; margin-top: 1rem; }
   button:disabled { opacity: 0.6; }
   #msg { margin-top: 1rem; font-size: 0.9rem; }
+  #ocr-status { font-size: 0.82rem; padding: 0.5rem 0.65rem; border-radius: 8px; margin-bottom: 0.75rem; }
+  #ocr-status.ok { background: #ecfdf5; color: #065f46; }
+  #ocr-status.warn { background: #fff7ed; color: #9a3412; }
   </style>
 </head>
 <body>
   <h1>PDF2Word (OCR avançado)</h1>
+  <p id="ocr-status">A verificar OCR…</p>
   <form id="f">
     <label>PDF<input type="file" name="file" accept=".pdf" required></label>
     <label>Modo OCR
@@ -156,6 +169,16 @@ def ui():
   <script>
     const f = document.getElementById('f');
     const msg = document.getElementById('msg');
+    const ocrStatus = document.getElementById('ocr-status');
+    fetch('/health').then(r => r.json()).then(h => {
+      if (h.tesseract) {
+        ocrStatus.className = 'ok';
+        ocrStatus.textContent = 'Tesseract disponível' + (h.tesseract_cmd ? ' (' + h.tesseract_cmd + ')' : '');
+      } else {
+        ocrStatus.className = 'warn';
+        ocrStatus.textContent = 'Tesseract indisponível no servidor — use modo «Automático» ou «Só texto nativo», ou instale OCR no host.';
+      }
+    }).catch(() => { ocrStatus.textContent = ''; });
     f.addEventListener('submit', async (e) => {
       e.preventDefault();
       msg.textContent = 'A converter...';
@@ -167,7 +190,9 @@ def ui():
         const r = await fetch('/convert', { method: 'POST', body: fd });
         const j = await r.json();
         if (!r.ok) throw new Error(j.detail || r.statusText);
-        msg.innerHTML = `Pronto: ${j.pages} págs (${j.mode_used}). <a href="${j.download}">Descarregar DOCX</a>`;
+        let line = `Pronto: ${j.pages} págs (${j.mode_used}). <a href="${j.download}">Descarregar DOCX</a>`;
+        if (j.warning) line += `<br><span style="color:#9a3412">${j.warning}</span>`;
+        msg.innerHTML = line;
       } catch (err) {
         msg.textContent = 'Erro: ' + err.message;
       } finally {
