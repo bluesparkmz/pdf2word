@@ -8,16 +8,16 @@ import pymupdf as fitz
 
 from config import settings
 from services.docx_build import (
-    add_native_page,
     add_ocr_page,
+    add_page_elements,
     apply_document_page_size,
     new_document,
     page_size_key,
     start_new_page,
 )
 from services.ocr import ocr_pdf_pages
+from services.page_content import extract_page_content
 from services.pdf_analyze import analyze_pdf, pdf_needs_ocr
-from services.text_extract import extract_page_blocks
 
 
 class OcrMode(str, Enum):
@@ -84,12 +84,18 @@ def convert_pdf_to_docx(
             needs_ocr_page = ocr_mode != OcrMode.OFF and (
                 use_ocr_globally or use_ocr_auto or i in ocr_indices
             )
-            if needs_ocr_page:
+            content = extract_page_content(page)
+            if content:
+                add_page_elements(doc, content)
+                if needs_ocr_page:
+                    ocr_count += 1
+                else:
+                    native_count += 1
+            elif needs_ocr_page:
                 add_ocr_page(doc, ocr_text.get(i, ""), i)
                 ocr_count += 1
             else:
-                blocks = extract_page_blocks(page)
-                add_native_page(doc, blocks)
+                add_page_elements(doc, [])
                 native_count += 1
     finally:
         pdf.close()

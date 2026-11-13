@@ -5,6 +5,7 @@ from docx.enum.section import WD_ORIENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.shared import Inches, Mm, Pt
 
+from services.page_content import PageElement, ParagraphElement, TableElement
 from services.text_extract import TextBlock
 
 # PDF page sizes in points (1/72 inch); snap when close for exact paper in Word
@@ -67,22 +68,56 @@ def start_new_page(doc: Document, width_pt: float, height_pt: float, *, new_size
         doc.add_page_break()
 
 
-def add_native_page(doc: Document, blocks: list[TextBlock]) -> None:
-    if not blocks:
+def _add_paragraph_block(doc: Document, block: TextBlock, body_size: float) -> None:
+    p = doc.add_paragraph()
+    run = p.add_run(block.text)
+    if block.is_bold:
+        run.bold = True
+    if block.size >= body_size * 1.35:
+        run.font.size = Pt(min(block.size, 28))
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    else:
+        run.font.size = Pt(11)
+
+
+def _add_word_table(doc: Document, rows: list[list[str]]) -> None:
+    col_count = max(len(row) for row in rows)
+    row_count = len(rows)
+    table = doc.add_table(rows=row_count, cols=col_count)
+    try:
+        table.style = "Table Grid"
+    except KeyError:
+        pass
+    for ri, row in enumerate(rows):
+        for ci in range(col_count):
+            text = row[ci] if ci < len(row) else ""
+            table.rows[ri].cells[ci].text = text
+            for para in table.rows[ri].cells[ci].paragraphs:
+                for run in para.runs:
+                    run.font.size = Pt(10)
+    doc.add_paragraph()
+
+
+def add_page_elements(doc: Document, elements: list[PageElement]) -> None:
+    if not elements:
         doc.add_paragraph("(página sem texto legível)")
         return
-    sizes = [b.size for b in blocks if b.size > 0]
+    para_blocks = [e.block for e in elements if isinstance(e, ParagraphElement)]
+    sizes = [b.size for b in para_blocks if b.size > 0]
     body_size = sorted(sizes)[len(sizes) // 2] if sizes else 12.0
-    for block in blocks:
-        p = doc.add_paragraph()
-        run = p.add_run(block.text)
-        if block.is_bold:
-            run.bold = True
-        if block.size >= body_size * 1.35:
-            run.font.size = Pt(min(block.size, 28))
-            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    for el in elements:
+        if isinstance(el, TableElement):
+            _add_word_table(doc, el.rows)
         else:
-            run.font.size = Pt(11)
+            _add_paragraph_block(doc, el.block, body_size)
+
+
+def add_native_page(doc: Document, blocks: list[TextBlock]) -> None:
+    """Legacy: paragraphs only."""
+    add_page_elements(
+        doc,
+        [ParagraphElement(y0=0.0, block=b) for b in blocks],
+    )
 
 
 def add_ocr_page(doc: Document, text: str, page_num: int) -> None:
