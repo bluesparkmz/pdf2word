@@ -4,10 +4,17 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
-import fitz
+import pymupdf as fitz
 
 from config import settings
-from services.docx_build import add_native_page, add_ocr_page, new_document
+from services.docx_build import (
+    add_native_page,
+    add_ocr_page,
+    apply_document_page_size,
+    new_document,
+    page_size_key,
+    start_new_page,
+)
 from services.ocr import ocr_pdf_pages
 from services.pdf_analyze import analyze_pdf, pdf_needs_ocr
 from services.text_extract import extract_page_blocks
@@ -61,17 +68,28 @@ def convert_pdf_to_docx(
 
     pdf = fitz.open(str(pdf_path))
     try:
+        last_size: tuple[float, float] | None = None
         for i in range(page_count):
-            not_first = i > 0
+            page = pdf[i]
+            rect = page.rect
+            size = page_size_key(rect.width, rect.height)
+            if i == 0:
+                apply_document_page_size(doc, rect.width, rect.height)
+            elif last_size is not None and size != last_size:
+                start_new_page(doc, rect.width, rect.height, new_size=True)
+            elif i > 0:
+                start_new_page(doc, rect.width, rect.height, new_size=False)
+            last_size = size
+
             needs_ocr_page = ocr_mode != OcrMode.OFF and (
                 use_ocr_globally or use_ocr_auto or i in ocr_indices
             )
             if needs_ocr_page:
-                add_ocr_page(doc, ocr_text.get(i, ""), i, not_first)
+                add_ocr_page(doc, ocr_text.get(i, ""), i)
                 ocr_count += 1
             else:
-                blocks = extract_page_blocks(pdf[i])
-                add_native_page(doc, blocks, not_first)
+                blocks = extract_page_blocks(page)
+                add_native_page(doc, blocks)
                 native_count += 1
     finally:
         pdf.close()
