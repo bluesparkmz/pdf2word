@@ -7,8 +7,15 @@ from typing import Union
 
 import pymupdf as fitz
 
+from services.pdf_images import PdfImage, extract_page_images
 from services.table_spans import SpanCellInfo, flat_rows_from_table, flat_rows_with_styles, span_rows_from_table
 from services.text_extract import TextBlock, text_block_from_bbox
+
+
+@dataclass
+class ImageElement:
+    y0: float
+    image: PdfImage
 
 
 @dataclass
@@ -24,7 +31,7 @@ class ParagraphElement:
     block: TextBlock
 
 
-PageElement = Union[TableElement, ParagraphElement]
+PageElement = Union[TableElement, ParagraphElement, ImageElement]
 
 
 def _rect_from_bbox(bbox) -> fitz.Rect:
@@ -79,6 +86,9 @@ def extract_page_content(page: fitz.Page) -> list[PageElement]:
         tb = text_block_from_bbox(page, bbox)
         if tb:
             elements.append(ParagraphElement(y0=bbox[1], block=tb))
+
+    for img in extract_page_images(page, table_rects):
+        elements.append(ImageElement(y0=img.y0, image=img))
 
     if not elements:
         plain = (page.get_text("text") or "").strip()

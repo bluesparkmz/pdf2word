@@ -5,11 +5,13 @@ from docx.enum.section import WD_ORIENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
+from io import BytesIO
+
 from docx.shared import Inches, Mm, Pt, RGBColor
 
 from services.pdf_style import TextRun
 
-from services.page_content import PageElement, ParagraphElement, TableElement
+from services.page_content import ImageElement, PageElement, ParagraphElement, TableElement
 from services.table_spans import SpanCellInfo
 from services.text_extract import TextBlock
 
@@ -182,6 +184,19 @@ def _add_word_table(doc: Document, rows: list[list[str]]) -> None:
     doc.add_paragraph()
 
 
+def _add_image_element(doc: Document, element: ImageElement) -> None:
+    img = element.image
+    stream = BytesIO(img.data)
+    width_in = min(img.width_pt / 72.0, 6.5)
+    try:
+        doc.add_picture(stream, width=Inches(width_in))
+    except Exception:
+        stream.seek(0)
+        doc.add_paragraph(f"[imagem não suportada: .{img.ext}]")
+        return
+    doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+
 def _add_table_element(doc: Document, element: TableElement) -> None:
     if element.span_rows:
         _add_word_table_spans(doc, element.span_rows)
@@ -199,6 +214,8 @@ def add_page_elements(doc: Document, elements: list[PageElement]) -> None:
     for el in elements:
         if isinstance(el, TableElement):
             _add_table_element(doc, el)
+        elif isinstance(el, ImageElement):
+            _add_image_element(doc, el)
         else:
             _add_paragraph_block(doc, el.block, body_size)
 
