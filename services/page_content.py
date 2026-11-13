@@ -7,8 +7,8 @@ from typing import Union
 
 import pymupdf as fitz
 
-from services.table_spans import SpanCellInfo, flat_rows_from_table, span_rows_from_table
-from services.text_extract import TextBlock
+from services.table_spans import SpanCellInfo, flat_rows_from_table, flat_rows_with_styles, span_rows_from_table
+from services.text_extract import TextBlock, text_block_from_bbox
 
 
 @dataclass
@@ -40,29 +40,6 @@ def _center_in_table(cx: float, cy: float, table_rects: list[fitz.Rect]) -> bool
     return False
 
 
-def _text_block_from_dict(block: dict) -> TextBlock | None:
-    lines_text: list[str] = []
-    max_size = 0.0
-    bold = False
-    for line in block.get("lines", []):
-        line_parts: list[str] = []
-        for span in line.get("spans", []):
-            t = span.get("text", "")
-            if not t:
-                continue
-            size = float(span.get("size", 12))
-            max_size = max(max_size, size)
-            if int(span.get("flags", 0)) & 16:
-                bold = True
-            line_parts.append(t)
-        if line_parts:
-            lines_text.append("".join(line_parts))
-    joined = "\n".join(lines_text).strip()
-    if not joined:
-        return None
-    return TextBlock(text=joined, size=max_size or 12.0, is_bold=bold)
-
-
 def extract_page_content(page: fitz.Page) -> list[PageElement]:
     elements: list[PageElement] = []
     table_rects: list[fitz.Rect] = []
@@ -70,8 +47,10 @@ def extract_page_content(page: fitz.Page) -> list[PageElement]:
     try:
         found = page.find_tables(refine=True)
         for table in found.tables:
-            span_rows = span_rows_from_table(table)
+            span_rows = span_rows_from_table(page, table)
             rows = flat_rows_from_table(table)
+            if not span_rows:
+                span_rows = flat_rows_with_styles(page, table)
             if span_rows:
                 has_text = any(cell.text for row in span_rows for cell in row)
             else:
@@ -97,7 +76,7 @@ def extract_page_content(page: fitz.Page) -> list[PageElement]:
         cy = (bbox[1] + bbox[3]) / 2
         if table_rects and _center_in_table(cx, cy, table_rects):
             continue
-        tb = _text_block_from_dict(block)
+        tb = text_block_from_bbox(page, bbox)
         if tb:
             elements.append(ParagraphElement(y0=bbox[1], block=tb))
 

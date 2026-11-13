@@ -3,7 +3,11 @@
 from docx import Document
 from docx.enum.section import WD_ORIENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.shared import Inches, Mm, Pt
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
+from docx.shared import Inches, Mm, Pt, RGBColor
+
+from services.pdf_style import TextRun
 
 from services.page_content import PageElement, ParagraphElement, TableElement
 from services.table_spans import SpanCellInfo
@@ -69,25 +73,59 @@ def start_new_page(doc: Document, width_pt: float, height_pt: float, *, new_size
         doc.add_page_break()
 
 
+def _apply_text_run(run, tr: TextRun, *, default_pt: float = 11) -> None:
+    run.text = tr.text
+    run.bold = tr.bold
+    run.font.size = Pt(min(tr.size or default_pt, 28))
+    if tr.color_rgb:
+        run.font.color.rgb = RGBColor(*tr.color_rgb)
+
+
+def _set_cell_shading(cell, rgb: tuple[int, int, int]) -> None:
+    tc_pr = cell._tc.get_or_add_tcPr()
+    shd = OxmlElement("w:shd")
+    shd.set(qn("w:val"), "clear")
+    shd.set(qn("w:color"), "auto")
+    shd.set(qn("w:fill"), f"{rgb[0]:02X}{rgb[1]:02X}{rgb[2]:02X}")
+    tc_pr.append(shd)
+
+
 def _add_paragraph_block(doc: Document, block: TextBlock, body_size: float) -> None:
     p = doc.add_paragraph()
-    run = p.add_run(block.text)
-    if block.is_bold:
-        run.bold = True
-    if block.size >= body_size * 1.35:
-        run.font.size = Pt(min(block.size, 28))
-        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    is_title = block.size >= body_size * 1.35
+    if block.runs:
+        for tr in block.runs:
+            _apply_text_run(p.add_run(), tr, default_pt=block.size)
     else:
-        run.font.size = Pt(11)
+        run = p.add_run(block.text)
+        run.bold = block.is_bold
+        size = Pt(min(block.size, 28)) if is_title else Pt(11)
+        run.font.size = size
+        if block.color_rgb:
+            run.font.color.rgb = RGBColor(*block.color_rgb)
+    if is_title:
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
 
-def _style_cell(cell, text: str, *, header: bool = False) -> None:
-    cell.text = text
-    for para in cell.paragraphs:
-        for run in para.runs:
-            run.font.size = Pt(10)
-            if header:
-                run.bold = True
+def _style_cell(
+    cell,
+    text: str,
+    *,
+    header: bool = False,
+    bold: bool = False,
+    color_rgb: tuple[int, int, int] | None = None,
+    fill_rgb: tuple[int, int, int] | None = None,
+    font_pt: float | None = None,
+) -> None:
+    if fill_rgb:
+        _set_cell_shading(cell, fill_rgb)
+    cell.text = ""
+    para = cell.paragraphs[0] if cell.paragraphs else cell.add_paragraph()
+    run = para.add_run(text)
+    run.bold = header or bold
+    run.font.size = Pt(font_pt or 10)
+    if color_rgb:
+        run.font.color.rgb = RGBColor(*color_rgb)
 
 
 def _add_word_table_spans(doc: Document, span_rows: list[list[SpanCellInfo]]) -> None:
@@ -113,7 +151,15 @@ def _add_word_table_spans(doc: Document, span_rows: list[list[SpanCellInfo]]) ->
             origin = table.cell(ri, ci)
             if cell_info.rowspan > 1 or cell_info.colspan > 1:
                 origin.merge(table.cell(end_ri, end_ci))
-            _style_cell(origin, cell_info.text, header=cell_info.tag == "th")
+            _style_cell(
+                origin,
+                cell_info.text,
+                header=cell_info.tag == "th",
+                bold=cell_info.bold,
+                color_rgb=cell_info.color_rgb,
+                fill_rgb=cell_info.fill_rgb,
+                font_pt=cell_info.font_pt,
+            )
             for rr in range(ri, end_ri + 1):
                 for cc in range(ci, end_ci + 1):
                     occupied[rr][cc] = True
@@ -132,14 +178,14 @@ def _add_word_table(doc: Document, rows: list[list[str]]) -> None:
     for ri, row in enumerate(rows):
         for ci in range(col_count):
             text = row[ci] if ci < len(row) else ""
-            _style_cell(table.rows[ri].cells[ci], text)
+            _style_cell(table.rows[ri].cells[ci], text, font_pt=10)
     doc.add_paragraph()
 
 
 def _add_table_element(doc: Document, element: TableElement) -> None:
     if element.span_rows:
         _add_word_table_spans(doc, element.span_rows)
-    else:
+    elif element.rows:
         _add_word_table(doc, element.rows)
 
 
