@@ -13,7 +13,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 ENV PDF2WORD_UPLOAD_DIR=/app/data/uploads \
-    PDF2WORD_OUTPUT_DIR=/app/data/outputs
+    PDF2WORD_OUTPUT_DIR=/app/data/outputs \
+    PDF2WORD_TESSERACT_CMD=/usr/bin/tesseract
 
 EXPOSE 8000
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -29,7 +29,17 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-## Executar
+## Docker / BlueSpark Cloud
+
+O ficheiro **`bs.json`** pede ao Docker Manager os pacotes OCR **só neste serviço** (ver `bluespark.container.md` e `docs/bs-json.md` na BlueSpark Cloud).
+
+Build local:
+
+```bash
+docker build -t pdf2word .
+```
+
+## Executar (local)
 
 ```powershell
 uvicorn main:app --reload --host 0.0.0.0 --port 8000

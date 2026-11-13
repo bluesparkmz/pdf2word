@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "name": "pdf2word",
+  "docker": {
+    "apt": [
+      "tesseract-ocr",
+      "tesseract-ocr-por",
+      "tesseract-ocr-eng",
+      "poppler-utils"
+    ],
+    "env": {
+      "PDF2WORD_TESSERACT_CMD": "/usr/bin/tesseract"
+    }
+  }
+}
