@@ -6,6 +6,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.shared import Inches, Mm, Pt
 
 from services.page_content import PageElement, ParagraphElement, TableElement
+from services.table_spans import SpanCellInfo
 from services.text_extract import TextBlock
 
 # PDF page sizes in points (1/72 inch); snap when close for exact paper in Word
@@ -80,6 +81,46 @@ def _add_paragraph_block(doc: Document, block: TextBlock, body_size: float) -> N
         run.font.size = Pt(11)
 
 
+def _style_cell(cell, text: str, *, header: bool = False) -> None:
+    cell.text = text
+    for para in cell.paragraphs:
+        for run in para.runs:
+            run.font.size = Pt(10)
+            if header:
+                run.bold = True
+
+
+def _add_word_table_spans(doc: Document, span_rows: list[list[SpanCellInfo]]) -> None:
+    col_count = max(sum(c.colspan for c in row) for row in span_rows)
+    row_count = len(span_rows)
+    table = doc.add_table(rows=row_count, cols=col_count)
+    try:
+        table.style = "Table Grid"
+    except KeyError:
+        pass
+
+    occupied = [[False] * col_count for _ in range(row_count)]
+
+    for ri, row_cells in enumerate(span_rows):
+        ci = 0
+        for cell_info in row_cells:
+            while ci < col_count and occupied[ri][ci]:
+                ci += 1
+            if ci >= col_count:
+                break
+            end_ri = min(row_count - 1, ri + cell_info.rowspan - 1)
+            end_ci = min(col_count - 1, ci + cell_info.colspan - 1)
+            origin = table.cell(ri, ci)
+            if cell_info.rowspan > 1 or cell_info.colspan > 1:
+                origin.merge(table.cell(end_ri, end_ci))
+            _style_cell(origin, cell_info.text, header=cell_info.tag == "th")
+            for rr in range(ri, end_ri + 1):
+                for cc in range(ci, end_ci + 1):
+                    occupied[rr][cc] = True
+            ci += cell_info.colspan
+    doc.add_paragraph()
+
+
 def _add_word_table(doc: Document, rows: list[list[str]]) -> None:
     col_count = max(len(row) for row in rows)
     row_count = len(rows)
@@ -91,11 +132,15 @@ def _add_word_table(doc: Document, rows: list[list[str]]) -> None:
     for ri, row in enumerate(rows):
         for ci in range(col_count):
             text = row[ci] if ci < len(row) else ""
-            table.rows[ri].cells[ci].text = text
-            for para in table.rows[ri].cells[ci].paragraphs:
-                for run in para.runs:
-                    run.font.size = Pt(10)
+            _style_cell(table.rows[ri].cells[ci], text)
     doc.add_paragraph()
+
+
+def _add_table_element(doc: Document, element: TableElement) -> None:
+    if element.span_rows:
+        _add_word_table_spans(doc, element.span_rows)
+    else:
+        _add_word_table(doc, element.rows)
 
 
 def add_page_elements(doc: Document, elements: list[PageElement]) -> None:
@@ -107,7 +152,7 @@ def add_page_elements(doc: Document, elements: list[PageElement]) -> None:
     body_size = sorted(sizes)[len(sizes) // 2] if sizes else 12.0
     for el in elements:
         if isinstance(el, TableElement):
-            _add_word_table(doc, el.rows)
+            _add_table_element(doc, el)
         else:
             _add_paragraph_block(doc, el.block, body_size)
 

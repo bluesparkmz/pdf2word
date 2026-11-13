@@ -7,6 +7,7 @@ from typing import Union
 
 import pymupdf as fitz
 
+from services.table_spans import SpanCellInfo, flat_rows_from_table, span_rows_from_table
 from services.text_extract import TextBlock
 
 
@@ -14,6 +15,7 @@ from services.text_extract import TextBlock
 class TableElement:
     y0: float
     rows: list[list[str]]
+    span_rows: list[list[SpanCellInfo]] | None = None
 
 
 @dataclass
@@ -66,17 +68,21 @@ def extract_page_content(page: fitz.Page) -> list[PageElement]:
     table_rects: list[fitz.Rect] = []
 
     try:
-        found = page.find_tables()
+        found = page.find_tables(refine=True)
         for table in found.tables:
-            raw = table.extract()
-            if not raw:
-                continue
-            rows = [[(cell or "").strip() for cell in row] for row in raw]
-            if not any(any(c for c in row) for c in rows):
+            span_rows = span_rows_from_table(table)
+            rows = flat_rows_from_table(table)
+            if span_rows:
+                has_text = any(cell.text for row in span_rows for cell in row)
+            else:
+                has_text = any(any(c for c in row) for row in rows)
+            if not has_text:
                 continue
             rect = _rect_from_bbox(table.bbox)
             table_rects.append(rect)
-            elements.append(TableElement(y0=rect.y0, rows=rows))
+            elements.append(
+                TableElement(y0=rect.y0, rows=rows, span_rows=span_rows),
+            )
     except Exception:
         pass
 
